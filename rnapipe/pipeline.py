@@ -146,28 +146,6 @@ def make_pipeline(state):
             filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)_R1.fastq.gz"),
             output=path.join(output_dir["seq"],
                              "{sample[0]}_R1.trimmed.fastq.gz"))
-    else:
-        # If trimming is skipped, create symlinks of FASTQ files in seq dir
-        ### TODO
-        if experiment.paired_end:
-            pipeline.transform(
-                task_func=stages.create_symlinks,
-                name="trim_reads",
-                input=output_from("original_fastqs"),
-                # Get R1 file and the corresponding R2 file
-                filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)_R1.fastq.gz"),
-                add_inputs=add_inputs("{path[0]}/{sample[0]}_R2.fastq.gz"),
-                output=path_list_join(output_dir["seq"],
-                           ["{sample[0]}_R1.fastq.gz",
-                            "{sample[0]}_R2.fastq.gz"]))
-        else:
-            pipeline.transform(
-                task_func=stages.create_symlinks,
-                name="trim_reads",
-                input=output_from("original_fastqs"),
-                filter=suffix("fastq.gz"),
-                output_dir=output_dir["seq"],
-                output="fastq.gz")
 
     # Post-trim FastQC
     if experiment.paired_end and experiment.trim_reads:
@@ -194,29 +172,53 @@ def make_pipeline(state):
     # This is so each technical replicate maintains a separate read group.
     if experiment.alignment_method == "star":
         align_task_name = "star_align"
-        (pipeline.transform(
-            task_func=stages.star_align,
-            name=align_task_name,
-            input=output_from("trim_reads"),
-            filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
-                             "_R[12](.trimmed)?.fastq.gz"),
-            output="%s/{sample[0]}/{sample[0]}.star.Aligned.out.bam" \
-                    % output_dir["alignments"],
-            extras=[output_dir["star_index"], "{sample[0]}"])
-        ).follows("create_star_index")
+        if experiment.trim_reads:
+            (pipeline.transform(
+                task_func=stages.star_align,
+                name=align_task_name,
+                input=output_from("trim_reads"),
+                filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
+                                 "_R[12](.trimmed)?.fastq.gz"),
+                output="%s/{sample[0]}/{sample[0]}.star.Aligned.out.bam" \
+                        % output_dir["alignments"],
+                extras=[output_dir["star_index"], "{sample[0]}"])
+            ).follows("create_star_index")
+        else:
+            (pipeline.transform(
+                task_func=stages.star_align,
+                name=align_task_name,
+                input=output_from("original_fastqs"),
+                filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
+                                 "_R[12](.trimmed)?.fastq.gz"),
+                output="%s/{sample[0]}/{sample[0]}.star.Aligned.out.bam" \
+                        % output_dir["alignments"],
+                extras=[output_dir["star_index"], "{sample[0]}"])
+            ).follows("create_star_index")
 
     if experiment.alignment_method == "hisat2":
         align_task_name = "hisat_align"
-        (pipeline.transform(
-            task_func=stages.hisat_align,
-            name="hisat_align",
-            input=output_from("trim_reads"),
-            filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
-                             "_R[12](.trimmed)?.fastq.gz"),
-            output="%s/{sample[0]}/{sample[0]}.hisat2.bam" \
-                    % output_dir["alignments"],
-            extras=[hisat_basename, "{sample[0]}"])
-        ).follows("create_hisat_index")
+        if experiment.trim_reads:
+            (pipeline.transform(
+                task_func=stages.hisat_align,
+                name="hisat_align",
+                input=output_from("trim_reads"),
+                filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
+                                 "_R[12](.trimmed)?.fastq.gz"),
+                output="%s/{sample[0]}/{sample[0]}.hisat2.bam" \
+                        % output_dir["alignments"],
+                extras=[hisat_basename, "{sample[0]}"])
+            ).follows("create_hisat_index")
+        else:
+            (pipeline.transform(
+                task_func=stages.hisat_align,
+                name="hisat_align",
+                input=output_from("original_fastqs"),
+                filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)" \
+                                 "_R[12](.trimmed)?.fastq.gz"),
+                output="%s/{sample[0]}/{sample[0]}.hisat2.bam" \
+                        % output_dir["alignments"],
+                extras=[hisat_basename, "{sample[0]}"])
+            ).follows("create_hisat_index")
 
     # Sort BAM by coordinates
     pipeline.transform(
@@ -224,7 +226,7 @@ def make_pipeline(state):
         name="sort_bam_by_coordinate",
         input=output_from(align_task_name),
         filter=formatter(".+/(?P<sample>[a-zA-Z0-9-_]+)\.(?P<method>(star|hisat2))\..*bam"),
-        output=["{path[0]}/{sample[0]}.{method[0]}.sorted.bam", 
+        output=["{path[0]}/{sample[0]}.{method[0]}.sorted.bam",
                 "{path[0]}/{sample[0]}.{method[0]}.sorted.bam.bai"])
 
     # Merge files with the same sample name
